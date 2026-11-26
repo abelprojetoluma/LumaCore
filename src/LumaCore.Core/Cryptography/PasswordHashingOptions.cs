@@ -36,7 +36,7 @@ public sealed class PasswordHashingOptions : IValidatableObject
     /// </summary>
     public int Iterations { get; set; } = DefaultIterations;
 
-    /// <inheritdoc/>
+    /// <inheritdoc />
     public IEnumerable<ValidationResult> Validate(
         ValidationContext validationContext)
     {
