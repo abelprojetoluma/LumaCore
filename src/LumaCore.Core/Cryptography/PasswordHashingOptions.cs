@@ -16,10 +16,19 @@ public sealed class PasswordHashingOptions : IValidatableObject
 {
     public const string SectionName = "PasswordHashing";
 
+    /// <summary>
+    /// Default PBKDF2 iteration count.
+    /// </summary>
     public const int DefaultIterations = 600_000;
 
+    /// <summary>
+    /// Minimum permitted PBKDF2 iteration count.
+    /// </summary>
     public const int MinAllowedIterations = 220_000;
 
+    /// <summary>
+    /// Maximum permitted PBKDF2 iteration count.
+    /// </summary>
     public const int MaxAllowedIterations = 10_000_000;
 
     /// <summary>
@@ -33,19 +42,13 @@ public sealed class PasswordHashingOptions : IValidatableObject
     {
         ArgumentNullException.ThrowIfNull(validationContext);
 
-        if (Iterations < MinAllowedIterations)
+        if (Iterations < MinAllowedIterations ||
+            Iterations > MaxAllowedIterations)
         {
             yield return new ValidationResult(
-                $"{nameof(Iterations)} must be at least " +
-                $"{MinAllowedIterations}, but was {Iterations}.",
-                new[] { nameof(Iterations) });
-        }
-
-        if (Iterations > MaxAllowedIterations)
-        {
-            yield return new ValidationResult(
-                $"{nameof(Iterations)} must not exceed " +
-                $"{MaxAllowedIterations}, but was {Iterations}.",
+                $"{nameof(Iterations)} must be between " +
+                $"{MinAllowedIterations} and {MaxAllowedIterations}, " +
+                $"but was {Iterations}.",
                 new[] { nameof(Iterations) });
         }
     }
