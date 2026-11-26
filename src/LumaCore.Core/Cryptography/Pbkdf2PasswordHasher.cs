@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MIT
 // Project: https://github.com/LumaCoreTech/LumaCore
 
+using System;
 using System.Buffers;
-using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -27,11 +27,13 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
     private const int MaxPasswordLength = 1024;
     private const int MaxHashStringLength = 256;
 
-    // Must remain aligned with PasswordHashingOptions.
-    private const int MaxAcceptedHashIterations = 10_000_000;
-
     private static readonly HashAlgorithmName HashAlgorithm =
         HashAlgorithmName.SHA512;
+
+    private static readonly UTF8Encoding PasswordEncoding =
+        new(
+            encoderShouldEmitUTF8Identifier: false,
+            throwOnInvalidBytes: true);
 
     /// <summary>
     /// Initializes the hasher with validated options.
@@ -68,41 +70,32 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         Span<byte> key = stackalloc byte[KeySize];
         Span<byte> saltAndKey = stackalloc byte[SaltAndKeySize];
 
+        byte[]? passwordBuffer = null;
+
         try
         {
             RandomNumberGenerator.Fill(salt);
 
             int maxByteCount =
-                Encoding.UTF8.GetMaxByteCount(password.Length);
+                PasswordEncoding.GetMaxByteCount(password.Length);
 
-            byte[] passwordBuffer =
+            passwordBuffer =
                 ArrayPool<byte>.Shared.Rent(maxByteCount);
 
-            try
-            {
-                int passwordByteCount =
-                    Encoding.UTF8.GetBytes(password, passwordBuffer);
+            int passwordByteCount =
+                PasswordEncoding.GetBytes(password, passwordBuffer);
 
-                Rfc2898DeriveBytes.Pbkdf2(
-                    password: passwordBuffer.AsSpan(0, passwordByteCount),
-                    salt: salt,
-                    destination: key,
-                    iterations: Iterations,
-                    hashAlgorithm: HashAlgorithm);
-            }
-            finally
-            {
-                // Clear the entire rented buffer, even if PBKDF2 fails.
-                CryptographicOperations.ZeroMemory(passwordBuffer);
-
-                ArrayPool<byte>.Shared.Return(passwordBuffer);
-            }
+            Rfc2898DeriveBytes.Pbkdf2(
+                password: passwordBuffer.AsSpan(0, passwordByteCount),
+                salt: salt,
+                destination: key,
+                iterations: Iterations,
+                hashAlgorithm: HashAlgorithm);
 
             salt.CopyTo(saltAndKey);
             key.CopyTo(saltAndKey[SaltSize..]);
 
-            string base64 =
-                Convert.ToBase64String(saltAndKey);
+            string base64 = Convert.ToBase64String(saltAndKey);
 
             return string.Create(
                 CultureInfo.InvariantCulture,
@@ -110,6 +103,12 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         }
         finally
         {
+            if (passwordBuffer is not null)
+            {
+                CryptographicOperations.ZeroMemory(passwordBuffer);
+                ArrayPool<byte>.Shared.Return(passwordBuffer);
+            }
+
             CryptographicOperations.ZeroMemory(salt);
             CryptographicOperations.ZeroMemory(key);
             CryptographicOperations.ZeroMemory(saltAndKey);
@@ -145,6 +144,8 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         Span<byte> derivedKey =
             stackalloc byte[KeySize];
 
+        byte[]? passwordBuffer = null;
+
         try
         {
             if (!Convert.TryFromBase64Chars(
@@ -164,30 +165,20 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 storedSaltAndKey[SaltSize..];
 
             int maxByteCount =
-                Encoding.UTF8.GetMaxByteCount(password.Length);
+                PasswordEncoding.GetMaxByteCount(password.Length);
 
-            byte[] passwordBuffer =
+            passwordBuffer =
                 ArrayPool<byte>.Shared.Rent(maxByteCount);
 
-            try
-            {
-                int passwordByteCount =
-                    Encoding.UTF8.GetBytes(password, passwordBuffer);
+            int passwordByteCount =
+                PasswordEncoding.GetBytes(password, passwordBuffer);
 
-                Rfc2898DeriveBytes.Pbkdf2(
-                    password: passwordBuffer.AsSpan(0, passwordByteCount),
-                    salt: storedSalt,
-                    destination: derivedKey,
-                    iterations: iterationsFromHash,
-                    hashAlgorithm: HashAlgorithm);
-            }
-            finally
-            {
-                // Clear sensitive password material on every exit path.
-                CryptographicOperations.ZeroMemory(passwordBuffer);
-
-                ArrayPool<byte>.Shared.Return(passwordBuffer);
-            }
+            Rfc2898DeriveBytes.Pbkdf2(
+                password: passwordBuffer.AsSpan(0, passwordByteCount),
+                salt: storedSalt,
+                destination: derivedKey,
+                iterations: iterationsFromHash,
+                hashAlgorithm: HashAlgorithm);
 
             bool verified =
                 CryptographicOperations.FixedTimeEquals(
@@ -201,6 +192,12 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         }
         finally
         {
+            if (passwordBuffer is not null)
+            {
+                CryptographicOperations.ZeroMemory(passwordBuffer);
+                ArrayPool<byte>.Shared.Return(passwordBuffer);
+            }
+
             CryptographicOperations.ZeroMemory(storedSaltAndKey);
             CryptographicOperations.ZeroMemory(derivedKey);
         }
@@ -217,8 +214,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         return iterationsFromHash < Iterations;
     }
 
-    private static void ValidatePassword(
-        ReadOnlySpan<char> password)
+    private static void ValidatePassword(ReadOnlySpan<char> password)
     {
         if (password.IsEmpty)
         {
@@ -262,8 +258,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 "Password hash must start with '$'.");
         }
 
-        ReadOnlySpan<char> remainder =
-            passwordHash[1..];
+        ReadOnlySpan<char> remainder = passwordHash[1..];
 
         int firstSeparator = remainder.IndexOf('$');
 
@@ -276,8 +271,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         ReadOnlySpan<char> algorithm =
             remainder[..firstSeparator];
 
-        remainder =
-            remainder[(firstSeparator + 1)..];
+        remainder = remainder[(firstSeparator + 1)..];
 
         int secondSeparator = remainder.IndexOf('$');
 
@@ -290,8 +284,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         ReadOnlySpan<char> iterationsField =
             remainder[..secondSeparator];
 
-        base64Payload =
-            remainder[(secondSeparator + 1)..];
+        base64Payload = remainder[(secondSeparator + 1)..];
 
         if (!algorithm.Equals(
                 AlgorithmIdentifier,
@@ -306,18 +299,16 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 NumberStyles.None,
                 CultureInfo.InvariantCulture,
                 out iterations)
-            || iterations < 1)
+            || iterations < PasswordHashingOptions.MinAllowedIterations)
         {
             throw new FormatException(
-                "Password hash iteration count is invalid.");
+                "Password hash iteration count is invalid or below the accepted minimum.");
         }
 
-        // Prevent attacker-controlled hashes from requesting
-        // excessive PBKDF2 computation.
-        if (iterations > MaxAcceptedHashIterations)
+        if (iterations > PasswordHashingOptions.MaxAllowedIterations)
         {
             throw new FormatException(
-                $"Password hash iteration count exceeds the maximum of {MaxAcceptedHashIterations}.");
+                $"Password hash iteration count exceeds the maximum of {PasswordHashingOptions.MaxAllowedIterations}.");
         }
 
         if (base64Payload.IsEmpty)
