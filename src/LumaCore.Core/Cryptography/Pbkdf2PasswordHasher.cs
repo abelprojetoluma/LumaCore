@@ -24,8 +24,15 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
     private const int KeySize = 64;
     private const int SaltAndKeySize = SaltSize + KeySize;
 
+    private const int Base64PayloadLength =
+        ((SaltAndKeySize + 2) / 3) * 4;
+
     private const int MaxPasswordLength = 1024;
     private const int MaxHashStringLength = 256;
+
+    // Compatibility floor for verifying legacy hashes only.
+    // Newly generated hashes always use validated options.
+    private const int MinSupportedHashIterations = 1;
 
     private static readonly HashAlgorithmName HashAlgorithm =
         HashAlgorithmName.SHA512;
@@ -57,7 +64,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
     }
 
     /// <summary>
-    /// Iterations used for newly generated hashes.
+    /// Gets the iterations used for newly generated hashes.
     /// </summary>
     public int Iterations { get; }
 
@@ -144,6 +151,9 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
         Span<byte> derivedKey =
             stackalloc byte[KeySize];
 
+        Span<char> canonicalBase64 =
+            stackalloc char[Base64PayloadLength];
+
         byte[]? passwordBuffer = null;
 
         try
@@ -156,6 +166,18 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
             {
                 throw new FormatException(
                     $"Password hash payload must decode to exactly {SaltAndKeySize} bytes.");
+            }
+
+            // Reject non-canonical Base64 representations.
+            if (!Convert.TryToBase64Chars(
+                    storedSaltAndKey,
+                    canonicalBase64,
+                    out int charsWritten)
+                || charsWritten != Base64PayloadLength
+                || !base64Payload.SequenceEqual(canonicalBase64))
+            {
+                throw new FormatException(
+                    "Password hash payload is not canonical Base64.");
             }
 
             ReadOnlySpan<byte> storedSalt =
@@ -185,6 +207,7 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                     derivedKey,
                     storedKey);
 
+            // Successfully verified legacy hashes can be upgraded.
             needsRehash =
                 verified && iterationsFromHash < Iterations;
 
@@ -200,6 +223,9 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
 
             CryptographicOperations.ZeroMemory(storedSaltAndKey);
             CryptographicOperations.ZeroMemory(derivedKey);
+            CryptographicOperations.ZeroMemory(
+                System.Runtime.InteropServices.MemoryMarshal.AsBytes(
+                    canonicalBase64));
         }
     }
 
@@ -299,10 +325,10 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 NumberStyles.None,
                 CultureInfo.InvariantCulture,
                 out iterations)
-            || iterations < PasswordHashingOptions.MinAllowedIterations)
+            || iterations < MinSupportedHashIterations)
         {
             throw new FormatException(
-                "Password hash iteration count is invalid or below the accepted minimum.");
+                "Password hash iteration count is invalid.");
         }
 
         if (iterations > PasswordHashingOptions.MaxAllowedIterations)
@@ -311,10 +337,10 @@ public sealed class Pbkdf2PasswordHasher : IPasswordHasher
                 $"Password hash iteration count exceeds the maximum of {PasswordHashingOptions.MaxAllowedIterations}.");
         }
 
-        if (base64Payload.IsEmpty)
+        if (base64Payload.Length != Base64PayloadLength)
         {
             throw new FormatException(
-                "Password hash payload is empty.");
+                "Password hash payload has an invalid length.");
         }
     }
 
